@@ -120,6 +120,7 @@ install(PROGRAMS scripts/cacao-setup
 	scripts/aorun/cacao-aorun-020-mlat
 	scripts/aorun/cacao-aorun-020-mlatset
 	scripts/aorun/cacao-aorun-021-mlatshow
+	scripts/aorun/cacao-aorun-024-acqJewelWFS
 	scripts/aorun/cacao-aorun-025-acqWFS
 	scripts/aorun/cacao-aorun-026-takeref
 	scripts/aorun/cacao-aorun-028-mkZFmodes

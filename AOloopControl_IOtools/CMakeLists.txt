@@ -9,6 +9,7 @@ set(SOURCEFILES
 	${SRCNAME}.c
     ${SRCNAME}.h
     acquireWFSim.c
+    acquireJewelWFSim.c
     ao188_preprocessor.c
     findspots.c
     spotpos.c
@@ -21,6 +22,7 @@ set(INCLUDEFILES
 	${SRCNAME}.h
     AOloopControl_IOtools.h
     acquireWFSim.h
+    acquireJewelWFSim.h
     ao188_preprocessor.h
     findspots.h
     spotpos.h

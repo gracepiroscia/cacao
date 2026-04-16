@@ -27,6 +27,7 @@
 #include "AOloopControl_IOtools/AOloopControl_IOtools.h"
 
 #include "acquireWFSim.h"
+#include "acquireJewelWFSim.h"
 #include "findspots.h"
 #include "spotpos.h"
 #include "WFScamsim.h"
@@ -47,6 +48,7 @@ INIT_MODULE_LIB(AOloopControl_IOtools)
 static errno_t init_module_CLI()
 {
     CLIADDCMD_AOloopControl_IOtools__acquireWFSim();
+    CLIADDCMD_AOloopControl_IOtools__acquireJewelWFSim();
     CLIADDCMD_AOloopControl_IOtools__spotpos();
     CLIADDCMD_AOloopControl_IOtools__WFScamsim();
     CLIADDCMD_AOloopControl_IOtools__WFSmap();
