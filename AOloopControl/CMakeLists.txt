@@ -79,6 +79,7 @@ install(PROGRAMS scripts/cacao-setup
 	scripts/cacao-fpsconfstop
 	scripts/cacao-fpslistadd
 	scripts/cacao-fpslistadd-ACQWFS
+	scripts/cacao-fpslistadd-ACQJEWELWFS
 	scripts/cacao-fpslistadd-MAPWFS
 	scripts/cacao-fpslistadd-MFILTTEST
 	scripts/cacao-fpslistadd-MVMGPU_CMODEVAL2DM

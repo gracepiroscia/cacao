@@ -82,6 +82,7 @@ if [ ${ACTION} == "start" ]; then
 ACTIONOK=1
 
 cacaomsglog "START"
+fi
 
 # if [ "$CACAO_WFSSTREAM_PROCESSED" = "ON" ]; then
 # 	echo "Processed WFS stream -> no scaling"
@@ -100,8 +101,8 @@ cacaomsglog "START"
 
 # cacaomsglog "confwupdate"
 # sendFPScmd "confwupdate acquWFS-${CACAO_LOOPNUMBER}"
-# cacaomsglog "runstart"
-# sendFPScmd "runstart acquWFS-${CACAO_LOOPNUMBER}"
+cacaomsglog "runstart"
+sendFPScmd "runstart acquJewelWFS-${CACAO_LOOPNUMBER}"
 
 
 # if [ $WaitForCompletion == "1" ]; then
@@ -121,7 +122,7 @@ cacaomsglog "START"
 if [ ${ACTION} == "stop" ]; then
 	ACTIONOK=1
 	cacaomsglog "STOP"
-	sendFPScmd "runstop acquWFS-${CACAO_LOOPNUMBER}"
+	sendFPScmd "runstop acquJewelWFS-${CACAO_LOOPNUMBER}"
 fi
 
 

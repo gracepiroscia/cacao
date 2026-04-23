@@ -210,7 +210,7 @@ static errno_t compute_function()
         // dummy power law apply
         for(uint_fast64_t ii = 0; ii < sizeWFS; ii++)
         {
-            imgimWFS0.im->array.F[ii] = powf(imgimWFS0.im->array.F[ii], 0.2f);
+            imgimWFS0.im->array.F[ii] = 15;// powf(imgimWFS0.im->array.F[ii], 0.2f);
         }
 
         processinfo_update_output_stream(processinfo, imgimWFS0.ID);
