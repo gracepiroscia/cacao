@@ -20,6 +20,12 @@ static long      fpi_AOloopindex;
 static uint32_t *semindex;
 static long      fpi_semindex;
 
+static char *cropname;
+long fpi_cropname;
+
+static char *bandPSFlocs; //rock on
+long fpi_bandPSFlocs;
+
 static CLICMDARGDEF farg[] =
 {
     {
@@ -49,7 +55,24 @@ static CLICMDARGDEF farg[] =
         (void **) &semindex,
         &fpi_semindex
     },
-  
+    {
+        CLIARG_IMG,
+        ".cropname",
+        "Shm name of crop info to read from",
+        "jewel_frame_szs",
+        CLIARG_VISIBLE_DEFAULT,
+        (void **) &cropname,
+        &fpi_cropname
+    },
+    {
+        CLIARG_IMG,
+        ".bandPSFlocs",
+        "Sub-psf locations for this MBI band",
+        "NAME_psfLocs",
+        CLIARG_VISIBLE_DEFAULT,
+        (void **) &bandPSFlocs,
+        &fpi_bandPSFlocs
+    },
 };
 
 
@@ -109,6 +132,14 @@ static errno_t compute_function()
 {
     DEBUG_TRACE_FSTART();
 
+    // read in crop params from shm
+    IMGID cropDim = mkIMGID_from_name(cropname); 
+    resolveIMGID(&cropDim, ERRMODE_ABORT);
+    uint64_t imcropsz = cropDim.im->array.UI64[0];
+
+    IMGID bandLocs = mkIMGID_from_name(bandPSFlocs);
+    printf("%lu %lu\n", bandLocs.im->array.UI64[0], bandLocs.im->array.UI64[0]);
+    resolveIMGID(&bandLocs, ERRMODE_ABORT);
 
     // connect to WFS image
     IMGID imgwfsim = stream_connect(insname);
@@ -128,7 +159,7 @@ static errno_t compute_function()
     {
         char name[STRINGMAXLEN_IMGNAME];
 
-        WRITE_IMAGENAME(name, "aol%u_JewelTest", *AOloopindex);
+        WRITE_IMAGENAME(name, "aol%u_JewelCrop", *AOloopindex);
         imgimWFS0 = stream_connect_create_2Df32(name, sizexWFS, sizeyWFS);
     }
 
@@ -141,6 +172,18 @@ static errno_t compute_function()
         *semindex = wfsim_semwaitindex;
     }
 
+    // initialize camera averaging arrays if not already done
+    void *__restrict array_tmp;
+    array_tmp = malloc(sizeof(float) * sizeWFS);
+    if(array_tmp == NULL)
+    {
+        PRINT_ERROR("malloc returns NULL pointer");
+        abort();
+    }
+    float *__restrict arrayftmp = (float *) array_tmp;
+    uint16_t *__restrict arrayutmp = (uint16_t *) array_tmp;
+    int16_t *__restrict arraystmp = (int16_t *) array_tmp;
+
     struct timespec time1, time2;
     long n_print_timings = 5000;
 
@@ -149,51 +192,40 @@ static errno_t compute_function()
         // ===========================================
         // COPY FRAME TO LOCAL MEMORY BUFFER
         // ===========================================
-        // void *__restrict array_tmp;
-        // array_tmp = malloc(sizeof(float) * sizeWFS);
-        // if(array_tmp == NULL)
-        // {
-        //     PRINT_ERROR("malloc returns NULL pointer");
-        //     abort();
-        // }
-        // float *__restrict arrayftmp = (float *) array_tmp;
-        // uint16_t *__restrict arrayutmp = (uint16_t *) array_tmp;
-        // int16_t *__restrict arraystmp = (int16_t *) array_tmp;
-
-        // int slice = 0;
+        int slice = 0;
 
 
-        // DEBUG_TRACEPOINT(" ");
+        DEBUG_TRACEPOINT(" ");
 
-        // if(processinfo->loopcnt % n_print_timings == 0)
-        // {
-        //     clock_gettime(CLOCK_MILK, &time1);
-        // }
+        if(processinfo->loopcnt % n_print_timings == 0)
+        {
+            clock_gettime(CLOCK_MILK, &time1);
+        }
 
-        // void *ptrv = NULL;
-        // switch(WFSatype)
-        // {
-        // case _DATATYPE_FLOAT:
-        // case _DATATYPE_UINT16:
-        // case _DATATYPE_INT16:
-        // {
-        //     int ts = ImageStreamIO_typesize(imgwfsim.md->datatype);
-        //     ptrv = imgwfsim.im->array.raw + ts * slice * sizeWFS;
-        //     memcpy(array_tmp, ptrv, ts * sizeWFS);
-        // }
-        // break;
+        void *ptrv = NULL;
+        switch(WFSatype)
+        {
+        case _DATATYPE_FLOAT:
+        case _DATATYPE_UINT16:
+        case _DATATYPE_INT16:
+        {
+            int ts = ImageStreamIO_typesize(imgwfsim.md->datatype);
+            ptrv = imgwfsim.im->array.raw + ts * slice * sizeWFS;
+            memcpy(array_tmp, ptrv, ts * sizeWFS);
+        }
+        break;
 
-        // default:
-        //     PRINT_ERROR("DATA TYPE NOT SUPPORTED");
-        //     abort();
-        //     break;
-        // }
+        default:
+            PRINT_ERROR("DATA TYPE NOT SUPPORTED");
+            abort();
+            break;
+        }
 
-        // if(processinfo->loopcnt % n_print_timings == 0)
-        // {
-        //     clock_gettime(CLOCK_MILK, &time2);
-        //     printf("Pre-copy time: %f us\n", timespec_diff_double(time1, time2) * 1e6);
-        // }
+        if(processinfo->loopcnt % n_print_timings == 0)
+        {
+            clock_gettime(CLOCK_MILK, &time2);
+            printf("Pre-copy time: %f us\n", timespec_diff_double(time1, time2) * 1e6);
+        }
 
         // ===================================================
         // TEST FUNCTION
