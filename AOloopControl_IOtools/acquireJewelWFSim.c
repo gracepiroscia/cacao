@@ -127,6 +127,49 @@ static errno_t help_function()
     return RETURN_SUCCESS;
 }
 
+/**
+ * @brief  Pre-compute clamped crop bounds for an array of PSF centers.
+ *
+ * @param bounds     Pre-allocated output array of length n_psfs
+ * @param locs       Flat UI64 array of PSF centers [cx0,cy0, cx1,cy1, ...]
+ * @param n_psfs     Number of PSF centers
+ * @param imcropsz   Requested square crop side length
+ * @param sizexWFS   Source image width
+ * @param sizeyWFS   Source image height
+ */
+ typedef struct
+{
+    long src_x0, src_y0;
+    long crop_w, crop_h;
+} CropBounds;
+
+static void compute_crop_bounds(CropBounds      *bounds,
+                                const uint64_t  *locs,
+                                long             n_psfs,
+                                long             imcropsz,
+                                long             sizexWFS,
+                                long             sizeyWFS)
+{
+    long half = imcropsz / 2;
+
+    for(long p = 0; p < n_psfs; p++)
+    {
+        long cx = (long)locs[2*p];
+        long cy = (long)locs[2*p + 1];
+
+        long x0 = cx - half;
+        long y0 = cy - half;
+        long x1 = x0 + imcropsz;
+        long y1 = y0 + imcropsz;
+
+        bounds[p].src_x0 = x0 < 0        ? 0        : x0;
+        bounds[p].src_y0 = y0 < 0        ? 0        : y0;
+        long src_x1      = x1 > sizexWFS ? sizexWFS : x1;
+        long src_y1      = y1 > sizeyWFS ? sizeyWFS : y1;
+        bounds[p].crop_w = src_x1 - bounds[p].src_x0;
+        bounds[p].crop_h = src_y1 - bounds[p].src_y0;
+    }
+}
 
 static errno_t compute_function()
 {
@@ -135,11 +178,11 @@ static errno_t compute_function()
     // read in crop params from shm
     IMGID cropDim = mkIMGID_from_name(cropname); 
     resolveIMGID(&cropDim, ERRMODE_ABORT);
-    uint64_t imcropsz = cropDim.im->array.UI64[0];
+    long imcropsz = (long)cropDim.im->array.UI64[0];
 
     IMGID bandLocs = mkIMGID_from_name(bandPSFlocs);
-    printf("%lu %lu\n", bandLocs.im->array.UI64[0], bandLocs.im->array.UI64[0]);
     resolveIMGID(&bandLocs, ERRMODE_ABORT);
+    long n_psfs = (long)bandLocs.md->size[1];  // px center per PSF
 
     // connect to WFS image
     IMGID imgwfsim = stream_connect(insname);
@@ -148,10 +191,27 @@ static errno_t compute_function()
         printf("ERROR: no WFS input\n");
         return RETURN_FAILURE;
     }
+
     uint32_t sizexWFS = imgwfsim.md->size[0];
     uint32_t sizeyWFS = imgwfsim.md->size[1];
     uint64_t sizeWFS  = sizexWFS * sizeyWFS;
     uint8_t  WFSatype = imgwfsim.md->datatype;
+
+    // pre-calc crop coordinates
+    long slice_npix  = imcropsz * imcropsz;  // pixels per crop slice
+
+    CropBounds *bounds = malloc(sizeof(CropBounds) * n_psfs);
+    if(bounds == NULL)
+    {
+        PRINT_ERROR("malloc() error");
+        return RETURN_FAILURE;
+    }
+    compute_crop_bounds(bounds,
+                        bandLocs.im->array.UI64,
+                        n_psfs,
+                        imcropsz,
+                        (long)sizexWFS,
+                        (long)sizeyWFS);
 
 
     // create/read images
@@ -160,7 +220,10 @@ static errno_t compute_function()
         char name[STRINGMAXLEN_IMGNAME];
 
         WRITE_IMAGENAME(name, "aol%u_JewelCrop", *AOloopindex);
-        imgimWFS0 = stream_connect_create_2Df32(name, sizexWFS, sizeyWFS);
+        imgimWFS0 = stream_connect_create_3Df32(name,
+                                                imcropsz,
+                                                imcropsz,
+                                                n_psfs);
     }
 
     list_image_ID();
@@ -181,17 +244,15 @@ static errno_t compute_function()
         abort();
     }
     float *__restrict arrayftmp = (float *) array_tmp;
-    uint16_t *__restrict arrayutmp = (uint16_t *) array_tmp;
-    int16_t *__restrict arraystmp = (int16_t *) array_tmp;
 
     struct timespec time1, time2;
     long n_print_timings = 5000;
 
     INSERT_STD_PROCINFO_COMPUTEFUNC_START
     {
-        // ===========================================
-        // COPY FRAME TO LOCAL MEMORY BUFFER
-        // ===========================================
+        // ================================================
+        // COPY FRAME TO LOCAL MEMORY BUFFER + CAST TO FLOAT
+        // ================================================
         int slice = 0;
 
 
@@ -202,23 +263,31 @@ static errno_t compute_function()
             clock_gettime(CLOCK_MILK, &time1);
         }
 
-        void *ptrv = NULL;
         switch(WFSatype)
         {
-        case _DATATYPE_FLOAT:
-        case _DATATYPE_UINT16:
-        case _DATATYPE_INT16:
-        {
-            int ts = ImageStreamIO_typesize(imgwfsim.md->datatype);
-            ptrv = imgwfsim.im->array.raw + ts * slice * sizeWFS;
-            memcpy(array_tmp, ptrv, ts * sizeWFS);
-        }
-        break;
-
-        default:
-            PRINT_ERROR("DATA TYPE NOT SUPPORTED");
-            abort();
+            case _DATATYPE_FLOAT:
+            {
+                memcpy(arrayftmp, imgwfsim.im->array.F, sizeof(float) * sizeWFS);
+            }
             break;
+
+            case _DATATYPE_UINT16:
+            {
+                for(uint64_t ii = 0; ii < sizeWFS; ii++)
+                    arrayftmp[ii] = (float)imgwfsim.im->array.UI16[ii];
+            }
+            break;
+
+            case _DATATYPE_INT16:
+            {
+                for(uint64_t ii = 0; ii < sizeWFS; ii++)
+                    arrayftmp[ii] = (float)imgwfsim.im->array.SI16[ii];
+            }
+            break;
+
+            default:
+                PRINT_ERROR("DATA TYPE NOT SUPPORTED");
+                abort();
         }
 
         if(processinfo->loopcnt % n_print_timings == 0)
@@ -228,7 +297,7 @@ static errno_t compute_function()
         }
 
         // ===================================================
-        // TEST FUNCTION
+        // wfsim -> imgimWFS0 (cropped interferogram images)
         // ===================================================
         DEBUG_TRACEPOINT(" ");
 
@@ -239,10 +308,20 @@ static errno_t compute_function()
 
         imgimWFS0.md->write = 1;
 
-        // dummy power law apply
-        for(uint_fast64_t ii = 0; ii < sizeWFS; ii++)
+        for(long p = 0; p < n_psfs; p++)
         {
-            imgimWFS0.im->array.F[ii] = 15;// powf(imgimWFS0.im->array.F[ii], 0.2f);
+            long src_x0    = bounds[p].src_x0;
+            long src_y0    = bounds[p].src_y0;
+            long crop_w    = bounds[p].crop_w;
+            long crop_h    = bounds[p].crop_h;
+            long slice_off = p * slice_npix;
+
+            for(long row = 0; row < crop_h; row++)
+            {
+                float *src_row = arrayftmp + (src_y0 + row) * sizexWFS + src_x0;
+                float *dst_row = imgimWFS0.im->array.F + slice_off + row * imcropsz;
+                memcpy(dst_row, src_row, crop_w * sizeof(float));
+            }
         }
 
         processinfo_update_output_stream(processinfo, imgimWFS0.ID);
