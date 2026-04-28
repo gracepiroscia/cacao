@@ -6,8 +6,11 @@
 
 
 #include <math.h>
+#include <fftw3.h>
 
 #include "CommandLineInterface/CLIcore.h"
+
+#define FFTWOPTMODE FFTW_ESTIMATE
 
 // Local variables pointers
 
@@ -154,18 +157,18 @@ static void compute_crop_bounds(CropBounds      *bounds,
 
     for(long p = 0; p < n_psfs; p++)
     {
-        long cx = (long)locs[2*p];
-        long cy = (long)locs[2*p + 1];
+        long cy = (long)locs[2*p]; // [row, col] = [y, x]
+        long cx = (long)locs[2*p + 1];
 
         long x0 = cx - half;
         long y0 = cy - half;
         long x1 = x0 + imcropsz;
         long y1 = y0 + imcropsz;
 
-        bounds[p].src_x0 = x0 < 0        ? 0        : x0;
-        bounds[p].src_y0 = y0 < 0        ? 0        : y0;
-        long src_x1      = x1 > sizexWFS ? sizexWFS : x1;
-        long src_y1      = y1 > sizeyWFS ? sizeyWFS : y1;
+        bounds[p].src_x0 = x0 < 0 ? 0 : x0;
+        bounds[p].src_y0 = y0 < 0 ? 0 : y0;
+        long src_x1 = x1 > sizexWFS ? sizexWFS : x1;
+        long src_y1 = y1 > sizeyWFS ? sizeyWFS : y1;
         bounds[p].crop_w = src_x1 - bounds[p].src_x0;
         bounds[p].crop_h = src_y1 - bounds[p].src_y0;
     }
@@ -216,15 +219,44 @@ static errno_t compute_function()
 
     // create/read images
     IMGID imgimWFS0;
+    IMGID imgimWFS1;
     {
         char name[STRINGMAXLEN_IMGNAME];
 
-        WRITE_IMAGENAME(name, "aol%u_JewelCrop", *AOloopindex);
+        WRITE_IMAGENAME(name, "aol%u_imgimWFS0", *AOloopindex);
         imgimWFS0 = stream_connect_create_3Df32(name,
                                                 imcropsz,
                                                 imcropsz,
                                                 n_psfs);
+
+        WRITE_IMAGENAME(name, "aol%u_imgimWFS1", *AOloopindex);
+        imgimWFS1 = stream_connect_create_3Df32(name,
+                                                imcropsz,
+                                                imcropsz,
+                                                n_psfs);
     }
+
+    // Set-up FT plan and ptrs
+    long fft_out_w = imcropsz / 2 + 1;  // rfft output is only half+1 in x
+    fftwf_complex *fft_out = fftwf_malloc(sizeof(fftwf_complex) * fft_out_w * imcropsz * n_psfs);
+    if(fft_out == NULL)
+    {
+        PRINT_ERROR("fftwf_malloc() error");
+        return RETURN_FAILURE;
+    }
+    fftwf_plan plan = fftwf_plan_dft_r2c_2d(
+                            imcropsz,                   // rows (slow axis)
+                            imcropsz,                   // cols (fast axis)
+                            imgimWFS0.im->array.F,      // dummy inptr
+                            fft_out,                    // dummy outptr
+                            FFTW_ESTIMATE 
+                            );
+    if(plan == NULL)
+    {
+        PRINT_ERROR("fftwf_plan_dft_r2c_2d() failed");
+        return RETURN_FAILURE;
+    }
+    //
 
     list_image_ID();
 
@@ -333,6 +365,68 @@ static errno_t compute_function()
 
 
         DEBUG_TRACEPOINT(" ");
+
+        // ===================================================
+        // imgimWFS0 -> imgimWFS1 (phase)
+        // ===================================================
+        DEBUG_TRACEPOINT(" ");
+        if(processinfo->loopcnt % n_print_timings == 0)
+        {
+            clock_gettime(CLOCK_MILK, &time1);
+        }
+
+        imgimWFS1.md->write = 1;
+
+        // 1. fft
+        for(long p = 0; p < n_psfs; p++)
+        {
+            float *in = imgimWFS0.im->array.F + p * slice_npix;
+            fftwf_complex *out = fft_out + p * fft_out_w * imcropsz;
+
+            fftwf_execute_dft_r2c(plan, in, out); 
+        }
+
+        // 2. get phase and extend to full img (from half)
+        for(long p = 0; p < n_psfs; p++)
+        {
+            fftwf_complex *fft_slice = fft_out + p * fft_out_w * imcropsz;
+            float *phase_slice = imgimWFS1.im->array.F + p * fft_out_w * imcropsz;
+
+            for(long jj = 0; jj < imcropsz; jj++)
+            {
+                for(long ii = 0; ii < fft_out_w; ii++)
+                {
+                    float re = fft_slice[jj * fft_out_w + ii][0];
+                    float im = fft_slice[jj * fft_out_w + ii][1];
+                    phase_slice[jj * imcropsz + ii] = atan2f(im, re);
+                }
+            }
+
+            // extrap phase to full image (from half). phase(-u,-v) = -phase(u,v)
+            for(long ii = 1; ii < fft_out_w - 1; ii++)
+            {
+                phase_slice[0 * imcropsz + (imcropsz - ii)] =
+                    -phase_slice[0 * imcropsz + ii];
+
+                for(long jj = 1; jj < imcropsz; jj++)
+                {
+                    phase_slice[jj * imcropsz + (imcropsz - ii)] =
+                        -phase_slice[(imcropsz - jj) * imcropsz + ii];
+                }
+            }
+        }
+
+        processinfo_update_output_stream(processinfo, imgimWFS1.ID);
+        if(processinfo->loopcnt % n_print_timings == 0)
+        {
+            clock_gettime(CLOCK_MILK, &time2);
+            printf("Test apply power 0.2 to imWFS0: %f us\n", timespec_diff_double(time1, time2) * 1e6);
+        }
+
+        DEBUG_TRACEPOINT(" ");
+        // ===================================================
+        // imgimWFS1 -> imgimWFS2 (sample, flatten, stack)
+        // ===================================================
 
         // processinfo_WriteMessage_fmt(
         //     processinfo, "d%d n%d s%d a%d c%d",
