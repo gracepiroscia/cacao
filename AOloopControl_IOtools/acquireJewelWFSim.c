@@ -237,26 +237,31 @@ static errno_t compute_function()
     }
 
     // Set-up FT plan and ptrs
-    long fft_out_w = imcropsz / 2 + 1;  // rfft output is only half+1 in x
-    fftwf_complex *fft_out = fftwf_malloc(sizeof(fftwf_complex) * fft_out_w * imcropsz * n_psfs);
+    fftwf_complex *fft_in  = fftwf_malloc(sizeof(fftwf_complex) * slice_npix * n_psfs);
+    fftwf_complex *fft_out = fftwf_malloc(sizeof(fftwf_complex) * slice_npix * n_psfs);
+    if(fft_in == NULL)
+    {
+        PRINT_ERROR("fftwf_malloc() error");
+        return RETURN_FAILURE;
+    }
     if(fft_out == NULL)
     {
         PRINT_ERROR("fftwf_malloc() error");
         return RETURN_FAILURE;
     }
-    fftwf_plan plan = fftwf_plan_dft_r2c_2d(
+    fftwf_plan plan = fftwf_plan_dft_2d(
                             imcropsz,                   // rows (slow axis)
                             imcropsz,                   // cols (fast axis)
-                            imgimWFS0.im->array.F,      // dummy inptr
+                            fft_in,                     // dummy inptr
                             fft_out,                    // dummy outptr
+                            FFTW_FORWARD,
                             FFTW_ESTIMATE 
                             );
     if(plan == NULL)
     {
-        PRINT_ERROR("fftwf_plan_dft_r2c_2d() failed");
+        PRINT_ERROR("fftwf plan failed");
         return RETURN_FAILURE;
     }
-    //
 
     list_image_ID();
 
@@ -377,50 +382,52 @@ static errno_t compute_function()
 
         imgimWFS1.md->write = 1;
 
-        // 1. fft
+        // fft
         for(long p = 0; p < n_psfs; p++)
         {
             float *in = imgimWFS0.im->array.F + p * slice_npix;
-            fftwf_complex *out = fft_out + p * fft_out_w * imcropsz;
+            fftwf_complex *fin  = fft_in  + p * slice_npix;
+            fftwf_complex *out = fft_out + p * slice_npix;
 
-            fftwf_execute_dft_r2c(plan, in, out); 
-        }
+            // fftshift 
+            long half = imcropsz / 2;
 
-        // 2. get phase and extend to full img (from half)
-        for(long p = 0; p < n_psfs; p++)
-        {
-            fftwf_complex *fft_slice = fft_out + p * fft_out_w * imcropsz;
-            float *phase_slice = imgimWFS1.im->array.F + p * fft_out_w * imcropsz;
+            for(long row = 0; row < imcropsz; row++)
+            {
+                long src_row = (row + half) % imcropsz;
+                for(long col = 0; col < imcropsz; col++)
+                {
+                    long src_col = (col + half) % imcropsz;
+                    fin[row * imcropsz + col][0] = in[src_row * imcropsz + src_col];
+                    fin[row * imcropsz + col][1] = 0.0f;
+                }
+            }
+
+            fftwf_execute_dft(plan, fin, out);
+
+            // get phase and fftshift again
+            float *phase_slice = imgimWFS1.im->array.F + p * slice_npix;
 
             for(long jj = 0; jj < imcropsz; jj++)
             {
-                for(long ii = 0; ii < fft_out_w; ii++)
+                long src_row = (jj + half) % imcropsz;
+                for(long ii = 0; ii < imcropsz; ii++)
                 {
-                    float re = fft_slice[jj * fft_out_w + ii][0];
-                    float im = fft_slice[jj * fft_out_w + ii][1];
+                    long src_col = (ii + half) % imcropsz;
+                    float re = out[src_row * imcropsz + src_col][0];
+                    float im = out[src_row * imcropsz + src_col][1];
                     phase_slice[jj * imcropsz + ii] = atan2f(im, re);
                 }
             }
 
-            // extrap phase to full image (from half). phase(-u,-v) = -phase(u,v)
-            for(long ii = 1; ii < fft_out_w - 1; ii++)
-            {
-                phase_slice[0 * imcropsz + (imcropsz - ii)] =
-                    -phase_slice[0 * imcropsz + ii];
 
-                for(long jj = 1; jj < imcropsz; jj++)
-                {
-                    phase_slice[jj * imcropsz + (imcropsz - ii)] =
-                        -phase_slice[(imcropsz - jj) * imcropsz + ii];
-                }
-            }
         }
 
         processinfo_update_output_stream(processinfo, imgimWFS1.ID);
         if(processinfo->loopcnt % n_print_timings == 0)
         {
             clock_gettime(CLOCK_MILK, &time2);
-            printf("Test apply power 0.2 to imWFS0: %f us\n", timespec_diff_double(time1, time2) * 1e6);
+            printf("Test apply power 0.2 to imWFS1: %f us\n", timespec_diff_double(time1, time2) * 1e6);
         }
 
         DEBUG_TRACEPOINT(" ");
@@ -439,6 +446,12 @@ static errno_t compute_function()
     }
     INSERT_STD_PROCINFO_COMPUTEFUNC_END
 
+    // cleanup
+    fftwf_destroy_plan(plan);
+    fftwf_free(fft_in);
+    fftwf_free(fft_out);
+    free(bounds);
+    free(array_tmp);
 
     DEBUG_TRACE_FEXIT();
     return RETURN_SUCCESS;
