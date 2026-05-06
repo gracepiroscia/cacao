@@ -29,6 +29,9 @@ long fpi_cropname;
 static char *bandPSFlocs; //rock on
 long fpi_bandPSFlocs;
 
+static char *mfname; 
+long fpi_mfname;
+
 static CLICMDARGDEF farg[] =
 {
     {
@@ -75,6 +78,15 @@ static CLICMDARGDEF farg[] =
         CLIARG_VISIBLE_DEFAULT,
         (void **) &bandPSFlocs,
         &fpi_bandPSFlocs
+    },
+    {
+        CLIARG_IMG,
+        ".mfname",
+        "Shm name of the matched filter to apply",
+        "NAME_mf",
+        CLIARG_VISIBLE_DEFAULT,
+        (void **) &mfname,
+        &fpi_mfname
     },
 };
 
@@ -178,7 +190,7 @@ static errno_t compute_function()
 {
     DEBUG_TRACE_FSTART();
 
-    // read in crop params from shm
+    // read in crop and mf params from shm
     IMGID cropDim = mkIMGID_from_name(cropname); 
     resolveIMGID(&cropDim, ERRMODE_ABORT);
     long imcropsz = (long)cropDim.im->array.UI64[0];
@@ -186,6 +198,10 @@ static errno_t compute_function()
     IMGID bandLocs = mkIMGID_from_name(bandPSFlocs);
     resolveIMGID(&bandLocs, ERRMODE_ABORT);
     long n_psfs = (long)bandLocs.md->size[1];  // px center per PSF
+
+    IMGID mf = mkIMGID_from_name(mfname);
+    resolveIMGID(&mf, ERRMODE_ABORT);
+    long n_bl = (long)mf.md->size[0]; // number of baselines to samp from
 
     // connect to WFS image
     IMGID imgwfsim = stream_connect(insname);
@@ -220,6 +236,8 @@ static errno_t compute_function()
     // create/read images
     IMGID imgimWFS0;
     IMGID imgimWFS1;
+    IMGID imgimWFS2;
+    IMGID imgimWFS3;
     {
         char name[STRINGMAXLEN_IMGNAME];
 
@@ -234,9 +252,20 @@ static errno_t compute_function()
                                                 imcropsz,
                                                 imcropsz,
                                                 n_psfs);
+
+        WRITE_IMAGENAME(name, "aol%u_imgimWFS2", *AOloopindex);
+        imgimWFS2 = stream_connect_create_3Df32(name,
+                                                n_bl*n_psfs,
+                                                1,
+                                                1);
+        WRITE_IMAGENAME(name, "aol%u_imgimWFS3", *AOloopindex);
+        imgimWFS3 = stream_connect_create_3Df32(name,
+                                                imcropsz,
+                                                imcropsz,
+                                                n_psfs);
     }
 
-    // Set-up FT plan and ptrs
+    // Set-up FT plan and memory allocs
     fftwf_complex *fft_in  = fftwf_malloc(sizeof(fftwf_complex) * slice_npix * n_psfs);
     fftwf_complex *fft_out = fftwf_malloc(sizeof(fftwf_complex) * slice_npix * n_psfs);
     if(fft_in == NULL)
@@ -431,18 +460,82 @@ static errno_t compute_function()
         }
 
         DEBUG_TRACEPOINT(" ");
+
         // ===================================================
         // imgimWFS1 -> imgimWFS2 (sample, flatten, stack)
         // ===================================================
+        DEBUG_TRACEPOINT(" ");
+        if(processinfo->loopcnt % n_print_timings == 0)
+        {
+            clock_gettime(CLOCK_MILK, &time1);
+        }
 
-        // processinfo_WriteMessage_fmt(
-        //     processinfo, "d%d n%d s%d a%d c%d",
-        //     status_darksub,
-        //     status_normalize,
-        //     status_refsub,
-        //     status_ave,
-        //     status_wfsrefc
-        // );
+        imgimWFS2.md->write = 1;
+
+        float         *dst      = imgimWFS2.im->array.F;
+        const uint64_t *mf_coords = mf.im->array.UI64;
+
+        for(long bl = 0; bl < n_bl; bl++)
+        {
+            for(long p = 0; p < n_psfs; p++)
+            {
+                long row = (long)mf_coords[0 * n_psfs * n_bl + p * n_bl + bl];
+                long col = (long)mf_coords[1 * n_psfs * n_bl + p * n_bl + bl];;
+
+                float sample = imgimWFS1.im->array.F[p * slice_npix
+                                                     + row * imcropsz
+                                                     + col];
+
+                dst[bl * n_psfs + p] = sample;
+            }
+        }
+
+        processinfo_update_output_stream(processinfo, imgimWFS2.ID);
+        if(processinfo->loopcnt % n_print_timings == 0)
+        {
+            clock_gettime(CLOCK_MILK, &time2);
+            printf("Test apply power 0.2 to imWFS2: %f us\n", timespec_diff_double(time1, time2) * 1e6);
+        }
+
+        DEBUG_TRACEPOINT(" ");
+
+        // ===================================================
+        // imgimWFS3 to check sampling 
+        // ===================================================
+        DEBUG_TRACEPOINT(" ");
+        if(processinfo->loopcnt % n_print_timings == 0)
+        {
+            clock_gettime(CLOCK_MILK, &time1);
+        }
+
+        imgimWFS3.md->write = 1;
+
+        // copy phase slices as base
+        memcpy(imgimWFS3.im->array.F,
+               imgimWFS1.im->array.F,
+               sizeof(float) * slice_npix * n_psfs);
+
+        for(long bl = 0; bl < n_bl; bl++)
+        {
+            for(long p = 0; p < n_psfs; p++)
+            {
+                long row = (long)mf_coords[0 * n_psfs * n_bl + p * n_bl + bl];
+                long col = (long)mf_coords[1 * n_psfs * n_bl + p * n_bl + bl];
+
+                imgimWFS3.im->array.F[p * slice_npix
+                                      + row * imcropsz
+                                      + col] = 4.0f;
+            }
+        }
+
+        processinfo_update_output_stream(processinfo, imgimWFS3.ID);
+        if(processinfo->loopcnt % n_print_timings == 0)
+        {
+            clock_gettime(CLOCK_MILK, &time2);
+            printf("Test apply power 0.2 to imWFS3: %f us\n", timespec_diff_double(time1, time2) * 1e6);
+        }
+
+        DEBUG_TRACEPOINT(" ");
     }
     INSERT_STD_PROCINFO_COMPUTEFUNC_END
 
