@@ -241,24 +241,24 @@ static errno_t compute_function()
     {
         char name[STRINGMAXLEN_IMGNAME];
 
-        WRITE_IMAGENAME(name, "aol%u_imgimWFS0", *AOloopindex);
+        WRITE_IMAGENAME(name, "aol%u_imWFS0", *AOloopindex);
         imgimWFS0 = stream_connect_create_3Df32(name,
                                                 imcropsz,
                                                 imcropsz,
                                                 n_psfs);
 
-        WRITE_IMAGENAME(name, "aol%u_imgimWFS1", *AOloopindex);
+        WRITE_IMAGENAME(name, "aol%u_imWFS1", *AOloopindex);
         imgimWFS1 = stream_connect_create_3Df32(name,
                                                 imcropsz,
                                                 imcropsz,
                                                 n_psfs);
 
-        WRITE_IMAGENAME(name, "aol%u_imgimWFS2", *AOloopindex);
+        WRITE_IMAGENAME(name, "aol%u_imWFS2", *AOloopindex);
         imgimWFS2 = stream_connect_create_3Df32(name,
                                                 n_bl*n_psfs,
                                                 1,
                                                 1);
-        WRITE_IMAGENAME(name, "aol%u_imgimWFS3", *AOloopindex);
+        WRITE_IMAGENAME(name, "aol%u_imWFS3", *AOloopindex);
         imgimWFS3 = stream_connect_create_3Df32(name,
                                                 imcropsz,
                                                 imcropsz,
